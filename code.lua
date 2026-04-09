@@ -1,381 +1,216 @@
-local Players = game:GetService("Players") -- used to detect players
-local RunService = game:GetService("RunService") -- used for AI update loops
-local Debris = game:GetService("Debris") -- used for cleaning temporary objects
-local PhysicsService = game:GetService("PhysicsService") -- used for collision handling
-local TweenService = game:GetService("TweenService") -- used for rotating sentry smoothly
-
-local Tool = script.Parent -- wrench tool instance
-
--- obtain player from tool
-local player = Tool.Parent.Parent
-
--- create controller table which acts like a class
-local WrenchController = {} -- main controller table
-WrenchController.__index = WrenchController -- enable OOP behaviour
-
--- function to initialize a new controller
-
-function WrenchController.new(player) -- player represents tool owner
-
-	local self = setmetatable({}, WrenchController) -- create object
-
-	self.Player = player -- store player reference
-	self.Character = player.Character or player.CharacterAdded:Wait() -- ensure character exists
-	self.Humanoid = self.Character:WaitForChild("Humanoid") -- get humanoid
-	self.Root = self.Character:WaitForChild("HumanoidRootPart") -- root part for positioning
-
-	self.Tool = Tool -- store tool reference
-	self.Assets = Tool:WaitForChild("Assets") -- asset folder
-
-	self.State = "Idle" -- controller state
-	self.Sentry = nil -- sentry reference
-	self.Target = nil -- current target
-
-	self.Level = 1 -- upgrade level
-	self.MaxLevel = 3 -- max upgrade level
-
-	self.SentryHealth = 100 -- sentry health
-
-	self.ProjectileSpeed = 120 -- projectile speed
-
-	self.Debounce = false -- attack debounce
-
-	self.DebugEnabled = true -- debug toggle
-
-	self:_loadAnimations() -- load animations
-	
-	self:_initDebugger() -- initialize debug system
-
-	return self -- return object
-
+local Players = game:GetService("Players") -- player service used for iterating enemy targets
+local RunService = game:GetService("RunService") -- heartbeat loop used for real-time AI updates
+local Debris = game:GetService("Debris") -- automatic cleanup of temporary objects like bullets
+local TweenService = game:GetService("TweenService") -- used to smoothly rotate the sentry instead of snapping
+local Tool = script.Parent -- the tool this script is inside of (wrench)
+local player = Tool.Parent.Parent -- assumes tool is inside character, character inside player
+-- controller table used as a pseudo-class
+-- this allows multiple independent wrench systems if needed later
+local WrenchController = {}
+WrenchController.__index = WrenchController -- enables OOP-like behavior
+-- constructor function (creates a new controller instance)
+function WrenchController.new(player)
+	local self = setmetatable({}, WrenchController) -- create object instance
+	-- caching references early avoids repeated expensive lookups later
+	self.Player = player -- owner of the wrench
+	self.Character = player.Character or player.CharacterAdded:Wait() -- ensures character exists
+	self.Humanoid = self.Character:WaitForChild("Humanoid") -- required for animations and health
+	self.Root = self.Character:WaitForChild("HumanoidRootPart") -- used for positioning and direction
+	self.Tool = Tool -- store tool reference for future expansion
+	self.Assets = Tool:WaitForChild("Assets") -- container holding sentry + animations
+	-- simple string-based state system for easier debugging during development
+	self.State = "Idle"
+	self.Sentry = nil -- will store the active sentry instance
+	self.Target = nil -- currently tracked enemy target
+	-- upgrade system kept linear for predictability (no branching yet)
+	self.Level = 1
+	self.MaxLevel = 3
+	self.SentryHealth = 100 -- starting health
+	self.ProjectileSpeed = 120 -- baseline projectile velocity
+	-- cooldown prevents absurd fire rate due to Heartbeat running every frame
+	self.FireCooldown = 0.4
+	self.LastShot = 0 -- timestamp of last shot
+	self.Debounce = false -- prevents spam clicking melee
+	self.DebugEnabled = true -- toggle debug output
+	self:_loadAnimations() -- preload animations to avoid runtime lag spikes
+	self:_initDebugger() -- initialize debug function
+	return self -- return constructed object
 end
-
--- load animation assets into memory
-
-function WrenchController:_loadAnimations()
-
-	self.Animations = {} -- animation container
-
-	local animator = self.Humanoid:WaitForChild("Animator") -- animator object
-
-	for _, anim in ipairs(self.Assets.Anims:GetChildren()) do -- iterate animations
-
-		self.Animations[anim.Name] = animator:LoadAnimation(anim) -- load animation
-
-	end -- animation loop end
-
-end -- animation loader end
-
--- debugger function
-
+-- initializes debug logger
 function WrenchController:_initDebugger()
-
-	self.Debug = function(msg) -- create debug function
-
-		if self.DebugEnabled then -- check debug toggle
-
-			print("[WrenchController]: "..tostring(msg)) -- print message
-
-		end -- debug condition
-
-	end -- debug function
-
-	self:Debug("Debugger initialized") -- startup message
-
+	-- wrapper function so debug can be toggled globally
+	self.Debug = function(msg)
+		if self.DebugEnabled then
+			print("[WrenchController]: "..tostring(msg))
+		end
+	end
+	self:Debug("Controller initialized") -- confirms system boot
 end
-
--- function for playing sound folders
-
-function WrenchController:_playSound(folder)
-
-	for _, sound in ipairs(folder:GetChildren()) do -- iterate sounds
-
-		local clone = sound:Clone() -- clone sound
-
-		clone.Parent = self.Root -- parent to player
-
-		clone:Play() -- play sound
-
-		Debris:AddItem(clone, clone.TimeLength) -- auto cleanup
-
-	end -- sound loop end
-
+-- loads animations once instead of every use
+function WrenchController:_loadAnimations()
+	self.Animations = {} -- container for animation tracks
+	local animator = self.Humanoid:WaitForChild("Animator") -- required for playing animations
+	-- preload all animations for smoother gameplay
+	for _, anim in ipairs(self.Assets.Anims:GetChildren()) do
+		self.Animations[anim.Name] = animator:LoadAnimation(anim)
+	end
 end
-
--- calculate sentry placement using raycast
-
+-- determines where the sentry should be placed
 function WrenchController:_calculatePlacement()
-
-	local forward = self.Root.CFrame.LookVector -- forward vector
-
-	local offset = forward * 4 -- forward offset
-
-	local startPosition = self.Root.Position + offset -- raycast start
-
-	local params = RaycastParams.new() -- raycast params
-
-	params.FilterDescendantsInstances = {self.Character} -- ignore player
-
-	params.FilterType = Enum.RaycastFilterType.Blacklist -- blacklist filter
-
-	local result = workspace:Raycast(startPosition, Vector3.new(0,-12,0), params) -- cast ray
-
-	if result then -- if hit surface
-
-		self:Debug("Surface detected for sentry placement") -- debug log
-
-		return CFrame.new(result.Position) -- placement cframe
-
-	end -- raycast check
-
-	self:Debug("Fallback placement used") -- fallback message
-
-	return self.Root.CFrame -- fallback
-
+	-- forward offset prevents placing the sentry inside the player model
+	local forward = self.Root.CFrame.LookVector
+	local offset = forward * 4
+	local startPosition = self.Root.Position + offset
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {self.Character} -- ignore self
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+	-- raycast downward to find ground (prevents floating sentries)
+	local result = workspace:Raycast(startPosition, Vector3.new(0,-12,0), params)
+	if result then
+		self:Debug("Ground detected for placement")
+		return CFrame.new(result.Position) -- snap to ground
+	end
+	-- fallback ensures placement still works even if raycast fails
+	return self.Root.CFrame
 end
-
--- spawn sentry
-
+-- creates and spawns the sentry
 function WrenchController:PlaceSentry()
-
-	if self.Sentry then return end -- prevent duplicates
-
-	local sentry = self.Assets.Sentry:Clone() -- clone sentry
-
-	local cf = self:_calculatePlacement() -- calculate placement
-
-	sentry:SetPrimaryPartCFrame(cf) -- position sentry
-
-	sentry.Parent = workspace -- parent to world
-
+	if self.Sentry then return end -- prevents multiple sentries
+	local sentry = self.Assets.Sentry:Clone() -- duplicate model
+	local cf = self:_calculatePlacement() -- get valid placement
+	sentry:SetPrimaryPartCFrame(cf) -- move sentry into position
+	sentry.Parent = workspace -- make visible in game
 	self.Sentry = sentry -- store reference
-
-	self:Debug("Sentry placed") -- debug message
-
-	self:_startSentryAI() -- start AI
-
+	self:Debug("Sentry placed")
+	self:_startSentryAI() -- start behavior loop
 end
-
--- upgrade sentry
-
+-- upgrades sentry stats
 function WrenchController:UpgradeSentry()
-
-	if not self.Sentry then return end -- ensure sentry exists
-
-	if self.Level >= self.MaxLevel then return end -- prevent over upgrade
-
-	self.Level += 1 -- increment level
-
-	self.SentryHealth += 50 -- increase health
-
-	self.ProjectileSpeed += 20 -- increase fire speed
-
-	self:Debug("Sentry upgraded to level "..self.Level) -- debug log
-
-end -- upgrade end
-
--- apply damage to sentry
-
-function WrenchController:DamageSentry(amount)
-
-	self.SentryHealth -= amount -- subtract health
-
-	self:Debug("Sentry damaged") -- debug log
-
-	if self.SentryHealth <= 0 then -- check death
-
-		self:DestroySentry() -- destroy sentry
-
-	end -- health check
-
+	if not self.Sentry then return end -- must exist
+	if self.Level >= self.MaxLevel then return end -- prevent overflow
+	self.Level += 1
+	-- scaling multiple stats gives upgrades more impact
+	self.SentryHealth += 50
+	self.ProjectileSpeed += 20
+	self.FireCooldown *= 0.9 -- faster fire rate
+	self:Debug("Upgraded to level "..self.Level)
 end
-
--- destroy sentry
+-- removes sentry completely
 function WrenchController:DestroySentry()
-
-	if self.Sentry then
-
-		self.Sentry:Destroy() -- destroy model
-
-		self.Sentry = nil -- remove reference
-
-		self.Level = 1 -- reset level
-
-		self.SentryHealth = 100 -- reset health
-
-		self:Debug("Sentry destroyed") -- debug log
-
-	end -- existence check
-
+	if not self.Sentry then return end
+	self.Sentry:Destroy() -- remove model
+	self.Sentry = nil -- clear reference
+	-- reset ensures next placement starts fresh
+	self.Level = 1
+	self.SentryHealth = 100
+	self:Debug("Sentry destroyed")
 end
-
--- wrench melee attack
-
+-- melee attack using wrench
 function WrenchController:Swing()
-
-	if self.Debounce then return end -- debounce protection
-
-	self.Debounce = true -- activate debounce
-
+	if self.Debounce then return end -- prevents spam
+	self.Debounce = true
 	self.Animations.SwingWrenchAnim:Play() -- play animation
-
-	local origin = self.Root.Position -- attack origin
-
-	local direction = self.Root.CFrame.LookVector * 6 -- attack direction
-
-	local params = RaycastParams.new() -- raycast parameters
-
-	params.FilterDescendantsInstances = {self.Character} -- ignore player
-
-	params.FilterType = Enum.RaycastFilterType.Blacklist -- blacklist
-
-	local result = workspace:Raycast(origin, direction, params) -- cast ray
-
-	if result then -- if hit
-
-		local hum = result.Instance.Parent:FindFirstChild("Humanoid") -- detect humanoid
-
-		if hum then -- ensure humanoid exists
-
+	local origin = self.Root.Position
+	local direction = self.Root.CFrame.LookVector * 6 -- short range attack
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {self.Character}
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+	local result = workspace:Raycast(origin, direction, params)
+	if result then
+		local hum = result.Instance.Parent:FindFirstChild("Humanoid")
+		if hum then
 			hum:TakeDamage(10) -- apply damage
-
-			self:Debug("Enemy hit by wrench") -- debug log
-
-		end -- humanoid check
-
-	end -- raycast result
-
-	task.delay(.5,function() -- delay reset
-
-		self.Debounce = false -- reset debounce
-
-	end) -- delay end
-
-end -- swing end
-
--- find nearest enemy player
-
-function WrenchController:_findTarget()
-
-	local closest = nil -- closest enemy
-
-	local distance = math.huge -- initial distance
-
-	for _, plr in ipairs(Players:GetPlayers()) do -- iterate players
-
-		if plr ~= self.Player then -- ignore owner
-
-			local char = plr.Character -- get character
-
-			if char and char:FindFirstChild("HumanoidRootPart") then -- validate character
-
-				local d = (char.HumanoidRootPart.Position - self.Sentry.PrimaryPart.Position).Magnitude -- distance
-
-				if d < distance and d < 60 then -- closer target
-
-					closest = char -- update closest
-
-					distance = d -- update distance
-
-				end -- distance check
-
-			end -- character check
-
-		end -- owner check
-
-	end -- player loop
-
-	return closest -- return target
-
-end -- finder end
-
--- fire projectile
-function WrenchController:_fireProjectile(target)
-
-	local bullet = Instance.new("Part") -- create projectile
-
-	bullet.Size = Vector3.new(.4,.4,.4) -- projectile size
-
-	bullet.Shape = Enum.PartType.Ball -- spherical bullet
-
-	bullet.Material = Enum.Material.Neon -- glowing look
-
-	bullet.CFrame = self.Sentry.PrimaryPart.CFrame -- spawn location
-
-	bullet.CanCollide = false -- disable collision
-
-	bullet.Parent = workspace -- parent to world
-
-	local velocity = (target.HumanoidRootPart.Position - bullet.Position).Unit * self.ProjectileSpeed -- velocity
-
-	local bodyVel = Instance.new("BodyVelocity") -- physics object
-
-	bodyVel.Velocity = velocity -- apply velocity
-
-	bodyVel.MaxForce = Vector3.new(1e5,1e5,1e5) -- large force
-
-	bodyVel.Parent = bullet -- attach to projectile
-
-	bullet.Touched:Connect(function(hit) -- hit detection
-
-		local hum = hit.Parent:FindFirstChild("Humanoid") -- find humanoid
-
-		if hum then hum:TakeDamage(15) end -- apply damage
-
-		bullet:Destroy() -- destroy bullet
-
-	end) -- touched event
-
-	Debris:AddItem(bullet,5) -- auto cleanup
-
-end -- projectile end
-
--- sentry AI loop
-
-function WrenchController:_startSentryAI()
-
-	RunService.Heartbeat:Connect(function() -- frame update
-
-		if not self.Sentry then return end -- ensure sentry exists
-
-		local target = self:_findTarget() -- search enemy
-
-		if target then -- if enemy found
-
-			self.Target = target -- store target
-
-			self:_fireProjectile(target) -- fire projectile
-
-		end -- target condition
-
-	end) -- heartbeat connection
-
-end -- ai loop end
-
--- tool activation
-
-function WrenchController:Activate()
-
-	if not self.Sentry then -- if no sentry exists
-
-		self:PlaceSentry() -- place sentry
-
-	else
-
-		self:Swing() -- perform attack
-
-	end -- branch end
-
+			self:Debug("Hit enemy with wrench")
+		end
+	end
+	task.delay(0.5,function()
+		self.Debounce = false -- reset after delay
+	end)
 end
-
+-- finds nearest valid enemy
+function WrenchController:_findTarget()
+	local closest = nil
+	local distance = math.huge
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= self.Player then -- ignore owner
+			local char = plr.Character
+			if char and char:FindFirstChild("HumanoidRootPart") then
+				local d = (char.HumanoidRootPart.Position - self.Sentry.PrimaryPart.Position).Magnitude
+				-- distance cap prevents shooting across entire map
+				if d < distance and d < 60 then
+					closest = char
+					distance = d
+				end
+			end
+		end
+	end
+	return closest
+end
+-- rotates sentry smoothly toward target
+function WrenchController:_rotateSentry(target)
+	local lookAt = CFrame.lookAt(
+		self.Sentry.PrimaryPart.Position,
+		target.HumanoidRootPart.Position
+	)
+	-- tween avoids robotic snapping rotation
+	local tween = TweenService:Create(
+		self.Sentry.PrimaryPart,
+		TweenInfo.new(0.2, Enum.EasingStyle.Linear),
+		{CFrame = lookAt}
+	)
+	tween:Play()
+end
+-- fires projectile toward target
+function WrenchController:_fireProjectile(target)
+	local now = tick()
+	-- cooldown prevents excessive firing due to frame updates
+	if now - self.LastShot < self.FireCooldown then return end
+	self.LastShot = now
+	local bullet = Instance.new("Part") -- dynamic projectile
+	bullet.Size = Vector3.new(.4,.4,.4)
+	bullet.Shape = Enum.PartType.Ball
+	bullet.Material = Enum.Material.Neon
+	bullet.CanCollide = false -- prevents physics issues
+	bullet.CFrame = self.Sentry.PrimaryPart.CFrame
+	bullet.Parent = workspace
+	local velocity = (target.HumanoidRootPart.Position - bullet.Position).Unit * self.ProjectileSpeed
+	local bodyVel = Instance.new("BodyVelocity")
+	bodyVel.Velocity = velocity
+	bodyVel.MaxForce = Vector3.new(1e5,1e5,1e5)
+	bodyVel.Parent = bullet
+	bullet.Touched:Connect(function(hit)
+		local hum = hit.Parent:FindFirstChild("Humanoid")
+		if hum then
+			hum:TakeDamage(15)
+		end
+		bullet:Destroy()
+	end)
+	Debris:AddItem(bullet,5) -- failsafe cleanup
+end
+-- AI loop
+function WrenchController:_startSentryAI()
+	RunService.Heartbeat:Connect(function()
+		if not self.Sentry then return end -- stop if destroyed
+		local target = self:_findTarget()
+		if target then
+			self.Target = target
+			self:_rotateSentry(target) -- face target
+			self:_fireProjectile(target) -- attack
+		end
+	end)
+end
+-- tool usage behavior
+function WrenchController:Activate()
+	-- single input with context-based behavior keeps controls simple
+	if not self.Sentry then
+		self:PlaceSentry()
+	else
+		self:Swing()
+	end
+end
 -- create controller instance
-
-local controller = WrenchController.new(player) -- initialize controller
-
--- connect tool activation
-
-Tool.Activated:Connect(function() -- event connection
-
-	controller:Activate() -- call activation
-
+local controller = WrenchController.new(player)
+-- bind tool click to controller logic
+Tool.Activated:Connect(function()
+	controller:Activate()
 end)
