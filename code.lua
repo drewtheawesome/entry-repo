@@ -73,6 +73,40 @@ function WrenchController:_calculatePlacement()
 	-- fallback ensures placement still works even if raycast fails
 	return self.Root.CFrame
 end
+
+function WrenchController:PrintControllerReport() -- outputs a full status report for debugging and organization
+	local sentryExists = self.Sentry ~= nil -- checks if a sentry currently exists
+	local sentryModelName = sentryExists and self.Sentry.Name or "None" -- gets the sentry model name safely
+	local targetName = self.Target and self.Target.Name or "None" -- gets the current target name safely
+	local currentState = self.State or "Unknown" -- stores the current controller state
+	local currentLevel = self.Level or 0 -- stores the current sentry level
+	local currentHealth = self.SentryHealth or 0 -- stores the current sentry health value
+	local maxLevel = self.MaxLevel or 0 -- stores the maximum upgrade level
+	local projectileSpeed = self.ProjectileSpeed or 0 -- stores the current projectile speed
+	local fireCooldown = self.FireCooldown or 0 -- stores the current fire cooldown
+	local ownerName = self.Player and self.Player.Name or "Unknown" -- gets the owner name safely
+	local rootPosition = self.Root and self.Root.Position or Vector3.zero -- gets the owner root position safely
+	local sentryPosition = sentryExists and self.Sentry.PrimaryPart and self.Sentry.PrimaryPart.Position or Vector3.zero -- gets the sentry position safely
+	local distanceToTarget = 0 -- default target distance value
+	if self.Target and self.Target:FindFirstChild("HumanoidRootPart") and sentryExists and self.Sentry.PrimaryPart then -- validates target and sentry before distance math
+		distanceToTarget = (self.Target.HumanoidRootPart.Position - self.Sentry.PrimaryPart.Position).Magnitude -- calculates distance to target
+	end -- closes the target-distance validation block
+	print("Wrench Controller Report") -- prints report header
+	print("Owner:", ownerName) -- prints the owner name
+	print("State:", currentState) -- prints the current state
+	print("Sentry Exists:", sentryExists) -- prints whether a sentry exists
+	print("Sentry Name:", sentryModelName) -- prints the sentry model name
+	print("Target:", targetName) -- prints the current target name
+	print("Level:", currentLevel.."/"..maxLevel) -- prints current level versus max level
+	print("Sentry Health:", currentHealth) -- prints sentry health
+	print("Projectile Speed:", projectileSpeed) -- prints projectile speed
+	print("Fire Cooldown:", fireCooldown) -- prints fire cooldown
+	print("Owner Root Position:", rootPosition) -- prints the owner position
+	print("Sentry Position:", sentryPosition) -- prints the sentry position
+	print("Distance To Target:", math.floor(distanceToTarget * 100) / 100) -- prints rounded target distance
+	print("           -                  ") -- prints report footer
+end -- ends the report function
+
 -- creates and spawns the sentry
 function WrenchController:PlaceSentry()
 	if self.Sentry then return end -- prevents multiple sentries
@@ -109,6 +143,7 @@ end
 function WrenchController:Swing()
 	if self.Debounce then return end -- prevents spam
 	self.Debounce = true
+	self:PrintControllerReport()
 	self.Animations.SwingWrenchAnim:Play() -- play animation
 	local origin = self.Root.Position
 	local direction = self.Root.CFrame.LookVector * 6 -- short range attack
