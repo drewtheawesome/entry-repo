@@ -198,31 +198,31 @@ function WrenchController:_rotateSentry(target)
 	tween:Play()
 end
 -- fires projectile toward target
-function WrenchController:_fireProjectile(target)
+unction WrenchController:_fireProjectile(target)
 	local now = tick()
-	-- cooldown prevents excessive firing due to frame updates
-	if now - self.LastShot < self.FireCooldown then return end
-	self.LastShot = now
-	local bullet = Instance.new("Part") -- dynamic projectile
-	bullet.Size = Vector3.new(.4,.4,.4)
-	bullet.Shape = Enum.PartType.Ball
-	bullet.Material = Enum.Material.Neon
-	bullet.CanCollide = false -- prevents physics issues
-	bullet.CFrame = self.Sentry.PrimaryPart.CFrame
-	bullet.Parent = workspace
-	local velocity = (target.HumanoidRootPart.Position - bullet.Position).Unit * self.ProjectileSpeed
-	local bodyVel = Instance.new("BodyVelocity")
-	bodyVel.Velocity = velocity
-	bodyVel.MaxForce = Vector3.new(1e5,1e5,1e5)
-	bodyVel.Parent = bullet
+	-- get the current time
+	if now - self.LastShot < self.FireCooldown then return end -- stop if still on cooldown
+	self.LastShot = now -- save when this shot was fired
+	local bullet = Instance.new("Part") -- create the projectile
+	bullet.Size = Vector3.new(.4,.4,.4) -- make it a small ball
+	bullet.Shape = Enum.PartType.Ball -- set the shape
+	bullet.Material = Enum.Material.Neon -- make it glow
+	bullet.CanCollide = false -- disable collisions
+	bullet.CFrame = self.Sentry.PrimaryPart.CFrame -- spawn it at the sentry
+	bullet.Parent = workspace -- add it to the workspace
+	local velocity = (target.HumanoidRootPart.Position - bullet.Position).Unit * self.ProjectileSpeed -- get direction and speed
+	local bodyVel = Instance.new("BodyVelocity") -- move the projectile
+	bodyVel.Velocity = velocity -- applying the velocity we just calculated (i hate physics)
+	bodyVel.MaxForce = Vector3.new(1e5,1e5,1e5) -- allow enough force
+	bodyVel.Parent = bullet -- attach it to the projectile
 	bullet.Touched:Connect(function(hit)
-		local hum = hit.Parent:FindFirstChild("Humanoid")
+		local hum = hit.Parent:FindFirstChild("Humanoid") -- check for a humanoid
 		if hum then
-			hum:TakeDamage(15)
+			hum:TakeDamage(15) -- damage the humanoid
 		end
-		bullet:Destroy()
+		bullet:Destroy() -- remove the projectile after impact
 	end)
-	Debris:AddItem(bullet,5) -- failsafe cleanup
+	Debris:AddItem(bullet,5) -- remove it after 5 seconds if nothing was hit
 end
 -- AI loop
 function WrenchController:_startSentryAI()
