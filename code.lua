@@ -1,3 +1,5 @@
+-- code for a tool based object, which is a wrench.
+
 local Players = game:GetService("Players") -- player service used for iterating enemy targets
 local RunService = game:GetService("RunService") -- heartbeat loop used for real-time AI updates
 local Debris = game:GetService("Debris") -- automatic cleanup of temporary objects like bullets
